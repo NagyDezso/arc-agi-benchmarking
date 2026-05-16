@@ -96,10 +96,46 @@ class AsyncRequestRateLimiter:
 
     async def get_available_requests(self) -> float: # Return type is float
          """Returns the approximate current number of available requests as float.
-         
+
          Performs a refill check before returning the value for accuracy.
          Uses the internal lock for consistency.
          """
          async with self._lock:
              self._refill()
-             return self._available_requests 
+             return self._available_requests
+
+
+class AsyncConcurrencyLimiter:
+    """
+    Caps the number of in-flight requests instead of their rate.
+
+    Use this for providers (e.g. a local LM Studio server) where the bottleneck
+    is "how many requests can be processed at once" rather than "how many per
+    second". Exposes the same `async with` interface as AsyncRequestRateLimiter
+    so the orchestrator can use either interchangeably.
+    """
+
+    def __init__(self, max_concurrency: int):
+        if not isinstance(max_concurrency, int) or max_concurrency <= 0:
+            raise ValueError("max_concurrency must be a positive integer")
+        self._max_concurrency = max_concurrency
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+
+    @property
+    def max_concurrency(self) -> int:
+        return self._max_concurrency
+
+    async def acquire(self, requests_needed: int = 1) -> None:
+        if requests_needed != 1:
+            raise ValueError("AsyncConcurrencyLimiter only supports acquiring 1 slot at a time")
+        await self._semaphore.acquire()
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    async def __aenter__(self):
+        await self._semaphore.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._semaphore.release()

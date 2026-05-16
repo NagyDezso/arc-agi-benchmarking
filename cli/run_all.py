@@ -22,7 +22,7 @@ if project_root not in sys.path:
 from main import ARCTester
 from arc_agi_benchmarking.utils.task_utils import read_models_config, read_provider_rate_limits, get_provider_timeout_config
 from arc_agi_benchmarking.utils.submission_exists import submission_exists
-from arc_agi_benchmarking.utils.rate_limiter import AsyncRequestRateLimiter
+from arc_agi_benchmarking.utils.rate_limiter import AsyncRequestRateLimiter, AsyncConcurrencyLimiter
 from arc_agi_benchmarking.utils.metrics import set_metrics_enabled, set_metrics_filename_prefix
 from arc_agi_benchmarking.utils.preflight import run_preflight
 from arc_agi_benchmarking.utils.logging_utils import setup_logging, StructuredFormatter
@@ -109,7 +109,7 @@ DEFAULT_RETRY_ATTEMPTS = 2
 # DEFAULT_PRINT_LOGS = False # This is now controlled by the global log level
 
 # --- Globals for Orchestrator ---
-PROVIDER_RATE_LIMITERS: Dict[str, AsyncRequestRateLimiter] = {}
+PROVIDER_RATE_LIMITERS: Dict[str, Any] = {}
 PROVIDER_CIRCUIT_BREAKERS: Dict[str, CircuitBreaker] = {}
 PROVIDER_TIMEOUT_CONFIGS: Dict[str, Dict] = {}
 MODEL_CONFIG_CACHE: Dict[str, Any] = {}
@@ -123,26 +123,46 @@ def get_or_create_rate_limiter(
     provider_name: str,
     all_provider_limits: Dict,
     model_config: Optional[Any] = None
-) -> AsyncRequestRateLimiter:
+) -> Any:
     """
     Get or create a rate limiter, checking for model-level config first.
-    
+
     Priority:
     1. Model-specific rate_limit in models.yml (uses config name as key)
     2. Provider-level rate limit in provider_config.yml
     3. Default rate limit
+
+    A `concurrency` key (at either the model or provider level) builds an
+    AsyncConcurrencyLimiter that caps in-flight requests instead of a
+    rate/period pair. Useful for local servers like LM Studio where the
+    bottleneck is parallelism, not request rate.
     """
     # Check for model-level rate limit first
     limiter_key = provider_name
     model_rate_limit = None
-    
+
     if model_config is not None:
         model_rate_limit = model_config.kwargs.get('rate_limit')
         if model_rate_limit:
             # Use config name as the limiter key for model-specific limits
             limiter_key = model_config.name
-    
+
     if limiter_key not in PROVIDER_RATE_LIMITERS:
+        # Model-level concurrency limit takes precedence over rate
+        if model_rate_limit and 'concurrency' in model_rate_limit:
+            concurrency = int(model_rate_limit['concurrency'])
+            logger.info(f"Initializing MODEL-SPECIFIC concurrency limiter for '{model_config.name}' with max_concurrency={concurrency}.")
+            PROVIDER_RATE_LIMITERS[limiter_key] = AsyncConcurrencyLimiter(max_concurrency=concurrency)
+            return PROVIDER_RATE_LIMITERS[limiter_key]
+
+        # Provider-level concurrency limit
+        provider_limits = all_provider_limits.get(provider_name)
+        if not model_rate_limit and provider_limits and 'concurrency' in provider_limits:
+            concurrency = int(provider_limits['concurrency'])
+            logger.info(f"Initializing concurrency limiter for provider '{provider_name}' with max_concurrency={concurrency}.")
+            PROVIDER_RATE_LIMITERS[limiter_key] = AsyncConcurrencyLimiter(max_concurrency=concurrency)
+            return PROVIDER_RATE_LIMITERS[limiter_key]
+
         if model_rate_limit:
             # Use model-specific rate limit
             config_rate = model_rate_limit.get('rate', DEFAULT_RATE_LIMIT_RATE)
@@ -203,7 +223,7 @@ def get_task_timeout(provider_name: str, all_provider_limits: Dict, max_task_tim
         return max_task_timeout
     return None
 
-async def run_single_test_wrapper(config_name: str, task_id: str, limiter: AsyncRequestRateLimiter,
+async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
                                   circuit_breaker: CircuitBreaker,
                                   task_timeout_seconds: Optional[float],
                                   data_dir: str, save_submission_dir: str,

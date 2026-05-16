@@ -33,6 +33,7 @@ PROVIDER_API_KEYS: Dict[str, List[str]] = {
     "together": ["TOGETHER_API_KEY"],
     "codex": ["OPENAI_API_KEY", "CODEX_API_KEY"],  # Either works
     "random": [],  # No API key needed
+    "lmstudio": [],  # Local server, no API key required
 }
 
 # Average tokens per ARC task (empirically estimated)

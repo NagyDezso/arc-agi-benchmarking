@@ -17,3 +17,4 @@ from .random import RandomAdapter
 from .claudeagentsdk import ClaudeagentsdkAdapter
 from .codexcli import CodexcliAdapter
 from .together import TogetherAdapter
+from .lmstudio import LMStudioAdapter

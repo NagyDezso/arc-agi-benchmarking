@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import platform
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -33,7 +34,7 @@ class BatchProgressManager:
         self.run_id = run_id
         self.progress_key = progress_key
         self._progress: BatchProgress | None = None
-        self._worker_id = f"{os.getpid()}@{os.uname().nodename}"
+        self._worker_id = f"{os.getpid()}@{platform.node()}"
 
     @property
     def progress(self) -> BatchProgress:

@@ -156,11 +156,24 @@ def read_provider_rate_limits() -> dict:
             for provider, limits in rate_limits_data.items():
                 if provider == 'defaults':
                     continue  # Skip defaults section
-                if not isinstance(limits, dict) or 'rate' not in limits or 'period' not in limits:
+                if not isinstance(limits, dict):
                     raise yaml.YAMLError(
-                        f"Provider '{provider}' in provider_config.yml must have 'rate' and 'period' keys."
+                        f"Provider '{provider}' in provider_config.yml must be a mapping."
                     )
-                if not isinstance(limits['rate'], (int, float)) or not isinstance(limits['period'], (int, float)):
+                has_concurrency = 'concurrency' in limits
+                has_rate_period = 'rate' in limits and 'period' in limits
+                if not (has_concurrency or has_rate_period):
+                    raise yaml.YAMLError(
+                        f"Provider '{provider}' in provider_config.yml must have either 'concurrency' or both 'rate' and 'period'."
+                    )
+                if has_concurrency and not isinstance(limits['concurrency'], int):
+                    raise yaml.YAMLError(
+                        f"'concurrency' for provider '{provider}' must be an integer."
+                    )
+                if has_rate_period and (
+                    not isinstance(limits['rate'], (int, float))
+                    or not isinstance(limits['period'], (int, float))
+                ):
                     raise yaml.YAMLError(
                         f"'rate' and 'period' for provider '{provider}' must be numbers."
                     )
