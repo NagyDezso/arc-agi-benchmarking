@@ -11,6 +11,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from tqdm import tqdm
+
+
+class TqdmLoggingHandler(logging.StreamHandler):
+    """StreamHandler that writes via tqdm.write so an active bar stays intact."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            tqdm.write(msg, file=self.stream)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
 # Standard fields included in all log records
 STANDARD_FIELDS = [
     "timestamp",
@@ -149,8 +163,9 @@ def setup_logging(
     # Remove existing handlers to avoid duplicates
     root_logger.handlers.clear()
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Console handler routed through tqdm.write so an active progress bar
+    # (in cli/run_all.py) is not scrolled off-screen by log lines.
+    console_handler = TqdmLoggingHandler(sys.stderr)
     console_handler.setLevel(numeric_level)
 
     if json_console:

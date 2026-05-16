@@ -60,7 +60,7 @@ together:
 lmstudio:
   # Local LM Studio server: cap in-flight requests instead of req/sec.
   # The bottleneck is GPU parallelism, not request rate.
-  concurrency: 1
+  concurrency: 5
 
 # Add other provider keys (matching models.yml 'provider' field) and their limits as needed.
 # Ensure these provider keys exactly match what's in your models.yml for each model config.

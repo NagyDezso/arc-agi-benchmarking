@@ -37,6 +37,7 @@ from arc_agi_benchmarking.checkpoint import BatchProgressManager, TaskStatus
 from arc_agi_benchmarking.storage import LocalStorageBackend
 
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_sleep_log
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -230,13 +231,28 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
                                   overwrite_submission: bool, print_submission: bool,
                                   num_attempts: int, retry_attempts: int,
                                   logs_base_dir: Path,
-                                  progress_manager: Optional[BatchProgressManager] = None) -> Optional[bool]:
-    logger.info(f"[Orchestrator] Queuing task: {task_id}, config: {config_name}")
+                                  progress_manager: Optional[BatchProgressManager] = None,
+                                  progress_bar: Optional[tqdm] = None) -> Optional[bool]:
+    logger.debug(f"[Orchestrator] Queuing task: {task_id}, config: {config_name}")
+
+    def _bump(status: str) -> None:
+        if progress_bar is None:
+            return
+        progress_bar.update(1)
+        if progress_manager is not None:
+            s = progress_manager.get_summary()
+            progress_bar.set_postfix(
+                ok=s["completed"], fail=s["failed"], pend=s["pending"], last=status,
+                refresh=False,
+            )
+        else:
+            progress_bar.set_postfix(last=status, refresh=False)
 
     # Claim the task for this worker (if using checkpointing)
     if progress_manager is not None:
         if not progress_manager.claim_task(task_id):
             logger.debug(f"[Orchestrator] Task {task_id} already claimed or completed, skipping")
+            _bump("skip")
             return None  # Skipped, not success or failure
 
     try:
@@ -245,6 +261,7 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
         logger.warning(f"[Orchestrator] Circuit breaker OPEN for {config_name}, skipping {task_id}. Recovery in {e.recovery_time:.1f}s")
         if progress_manager is not None:
             progress_manager.mark_failed(task_id, f"Circuit breaker open: {e}")
+        _bump("cb-open")
         return False
 
     @retry(
@@ -302,7 +319,7 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
     try:
         async with limiter:
             timeout_str = f"{task_timeout_seconds}s" if task_timeout_seconds else "none"
-            logger.info(f"[Orchestrator] Rate limiter acquired for {config_name}. Executing {task_id} (timeout={timeout_str})")
+            logger.debug(f"[Orchestrator] Rate limiter acquired for {config_name}. Executing {task_id} (timeout={timeout_str})")
             if task_timeout_seconds:
                 await task_timeout(
                     _synchronous_task_execution_attempt_with_tenacity,
@@ -318,6 +335,7 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
         logger.info(f"[Orchestrator] Successfully processed: {config_name} / {task_id}")
         if progress_manager is not None:
             progress_manager.mark_completed(task_id)
+        _bump("ok")
         return True
 
     except TaskTimeoutError as e:
@@ -325,6 +343,7 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
         logger.error(f"[Orchestrator] Task {task_id} ({config_name}) timed out after {e.elapsed:.2f}s (limit: {e.timeout}s)")
         if progress_manager is not None:
             progress_manager.mark_failed(task_id, f"Timeout after {e.elapsed:.2f}s")
+        _bump("timeout")
         return False
 
     except Exception as e:
@@ -335,6 +354,7 @@ async def run_single_test_wrapper(config_name: str, task_id: str, limiter: Any,
             logger.error(f"[Orchestrator] Failed (non-retryable): {config_name} / {task_id}. {type(e).__name__}: {e}", exc_info=True)
         if progress_manager is not None:
             progress_manager.mark_failed(task_id, f"{type(e).__name__}: {e}")
+        _bump("fail")
         return False
 
 async def main(task_list_file: Optional[str],
@@ -455,7 +475,9 @@ async def main(task_list_file: Optional[str],
         logger.warning(f"Error reading or parsing provider_config.yml: {e}. Using default rate limits.")
         all_provider_limits = {}
 
-    async_tasks_to_execute = []
+    # Resolve per-job runtime args up front (so we can size the queue based on
+    # the limiter that will actually be used).
+    prepared_jobs: List[Dict[str, Any]] = []
     for config_name, task_id in all_jobs_to_run:
         try:
             model_config_obj = get_model_config(config_name)
@@ -463,26 +485,62 @@ async def main(task_list_file: Optional[str],
             limiter = get_or_create_rate_limiter(provider_name, all_provider_limits, model_config_obj)
             circuit_breaker = get_or_create_circuit_breaker(provider_name, all_provider_limits, circuit_breaker_threshold)
             task_timeout_val = get_task_timeout(provider_name, all_provider_limits, max_task_timeout)
-            async_tasks_to_execute.append(run_single_test_wrapper(
-                config_name, task_id, limiter,
-                circuit_breaker, task_timeout_val,
-                data_dir, save_submission_dir,
-                overwrite_submission, print_submission,
-                num_attempts, retry_attempts,
-                logs_base_dir,
-                progress_manager,
-            ))
+            prepared_jobs.append({
+                "config_name": config_name,
+                "task_id": task_id,
+                "limiter": limiter,
+                "circuit_breaker": circuit_breaker,
+                "task_timeout_val": task_timeout_val,
+            })
         except ValueError as e: # Specific error for model config issues
             logger.error(f"Skipping config '{config_name}' for task '{task_id}' due to model config error: {e}")
         except Exception as e: # General error for other setup issues
             logger.error(f"Unexpected error setting up task for '{config_name}', '{task_id}': {e}", exc_info=True)
 
-    if not async_tasks_to_execute:
+    if not prepared_jobs:
         logger.warning("No tasks could be prepared for execution. Exiting.")
         return 1 # Return an error code
 
-    logger.info(f"Executing {len(async_tasks_to_execute)} tasks concurrently...")
-    results = await asyncio.gather(*async_tasks_to_execute, return_exceptions=True)
+    concurrency_caps = [
+        j["limiter"].max_concurrency
+        for j in prepared_jobs
+        if isinstance(j["limiter"], AsyncConcurrencyLimiter)
+    ]
+    queue_depth = max(concurrency_caps) if concurrency_caps else len(prepared_jobs)
+    queue_sem = asyncio.Semaphore(queue_depth)
+    logger.info(f"Scheduling {len(prepared_jobs)} tasks with queue_depth={queue_depth}")
+
+    # Progress bar tracks overall completion. Postfix shows ok/fail/pending
+    # pulled from the BatchProgressManager.
+    progress_bar = tqdm(
+        total=len(prepared_jobs),
+        desc=f"{config_to_test}",
+        unit="task",
+        dynamic_ncols=True,
+        smoothing=0.05,
+    )
+
+    async def _gated_run(job: Dict[str, Any]):
+        async with queue_sem:
+            return await run_single_test_wrapper(
+                job["config_name"], job["task_id"], job["limiter"],
+                job["circuit_breaker"], job["task_timeout_val"],
+                data_dir, save_submission_dir,
+                overwrite_submission, print_submission,
+                num_attempts, retry_attempts,
+                logs_base_dir,
+                progress_manager,
+                progress_bar,
+            )
+
+    logger.info(f"Executing {len(prepared_jobs)} tasks (queue_depth={queue_depth})...")
+    try:
+        results = await asyncio.gather(
+            *[_gated_run(j) for j in prepared_jobs], return_exceptions=True
+        )
+    finally:
+        progress_bar.close()
+    all_jobs_to_run = [(j["config_name"], j["task_id"]) for j in prepared_jobs]
 
     successful_runs = sum(1 for r in results if r is True)
     skipped_runs = sum(1 for r in results if r is None)
