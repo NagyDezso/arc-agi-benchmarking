@@ -1654,23 +1654,21 @@ models:
 ###### LM Studio ######
 ########################
 
-  # Local LM Studio server (OpenAI-compatible). Set LMSTUDIO_BASE_URL to override
-  # the default http://localhost:1234/v1. model_name must match the identifier
-  # of the model you have loaded in LM Studio.
-  - name: "lmstudio-local"
-    model_name: "local-model"
-    provider: "lmstudio"
-    max_tokens: 32768
-    pricing:
-      date: "2026-05-16"
-      input: 0.0
-      output: 0.0
-
   - name: "qwen3.6-35b-a3b-claude-4.7-opus-reasoning-distilled-apex"
     model_name: "qwen3.6-35b-a3b-claude-4.7-opus-reasoning-distilled-apex"
     provider: "lmstudio"
-    max_tokens: 32768
+    max_tokens: 45000
     pricing:
       date: "2026-05-16"
       input: 0.15
       output: 1.00
+
+  - name: "qwen3.6-35b-a3b"
+    model_name: "qwen3.6-35b-a3b"
+    provider: "lmstudio"
+    max_tokens: 45000
+    pricing:
+      date: "2026-05-16"
+      input: 0.15
+      output: 1.00
+
