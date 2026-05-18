@@ -180,6 +180,15 @@ class LMStudioAdapter(OpenAIBaseAdapter):
 
         follow_kwargs = dict(api_kwargs)
         follow_kwargs["max_tokens"] = reserved
+        # Stop as soon as the model closes the grid so it can't ramble past it.
+        existing_stop = follow_kwargs.get("stop")
+        grid_stops = ["]]\n", "]]\r\n", "]]\n\n"]
+        if existing_stop is None:
+            follow_kwargs["stop"] = grid_stops
+        elif isinstance(existing_stop, str):
+            follow_kwargs["stop"] = [existing_stop, *grid_stops]
+        else:
+            follow_kwargs["stop"] = [*existing_stop, *grid_stops]
 
         t1 = time.perf_counter()
         follow_stream = self.client.chat.completions.create(
@@ -220,6 +229,14 @@ class LMStudioAdapter(OpenAIBaseAdapter):
 
         pass2_elapsed = time.perf_counter() - t1
         final_content = "".join(pass2_chunks)
+        # OpenAI-compatible servers strip the stop string. If we stopped on a
+        # grid close, reattach `]]` so the parser sees a complete 2D array.
+        if pass2_finish == "stop" and final_content.rstrip().endswith("]"):
+            stripped = final_content.rstrip()
+            if not stripped.endswith("]]"):
+                final_content = stripped + "]"
+        elif pass2_finish == "stop" and "[[" in final_content and "]]" not in final_content:
+            final_content = final_content.rstrip() + "]]"
 
         # Pass 1 reasoning tokens are real spend even though we aborted the stream:
         # track them on prompt-side accounting is wrong; treat them as reasoning tokens
