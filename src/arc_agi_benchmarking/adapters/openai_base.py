@@ -26,7 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Keys in model_config.kwargs that are for internal use only and should NOT be passed to the API
 # Note: 'reasoning' and 'background' ARE valid Responses API parameters and should pass through
-_CONFIG_ONLY_KWARGS = {"rate_limit", "pricing", "enable_thinking"}
+_CONFIG_ONLY_KWARGS = {
+    "rate_limit",
+    "pricing",
+    "enable_thinking",
+    "reserved_final_grid_tokens",
+    "reserved_close_marker",
+    "reserved_nudge",
+}
 
 
 def _filter_api_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:

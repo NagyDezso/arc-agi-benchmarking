@@ -1657,7 +1657,7 @@ models:
   - name: "qwen3.6-35b-a3b-claude-4.7-opus-reasoning-distilled-apex"
     model_name: "qwen3.6-35b-a3b-claude-4.7-opus-reasoning-distilled-apex"
     provider: "lmstudio"
-    max_tokens: 45000
+    max_tokens: 65536
     pricing:
       date: "2026-05-16"
       input: 0.15
@@ -1666,7 +1666,17 @@ models:
   - name: "qwen3.6-35b-a3b"
     model_name: "qwen3.6-35b-a3b"
     provider: "lmstudio"
-    max_tokens: 45000
+    max_tokens: 65536
+    pricing:
+      date: "2026-05-16"
+      input: 0.15
+      output: 1.00
+
+  - name: "qwen3.6-35b-a3b-reserved"
+    model_name: "qwen3.6-35b-a3b"
+    provider: "lmstudio"
+    max_tokens: 65536
+    reserved_final_grid_tokens: 4096
     pricing:
       date: "2026-05-16"
       input: 0.15
