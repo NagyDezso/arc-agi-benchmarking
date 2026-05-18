@@ -393,6 +393,17 @@ IMPORTANT: Return ONLY the array, with no additional text, quotes, or formatting
         try:
             completion = self._call_ai_model(prompt=prompt)
             assistant_content = self._get_content(completion)
+            try:
+                usage = self._get_usage(completion)
+                reasoning = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else 0
+                visible_output = usage.completion_tokens - (reasoning or 0)
+                logger.info(
+                    f"LLM JSON extraction fallback invoked — "
+                    f"input: {usage.prompt_tokens}, reasoning: {reasoning}, "
+                    f"output: {visible_output}, total: {usage.total_tokens}"
+                )
+            except Exception as usage_err:
+                logger.info(f"LLM JSON extraction fallback invoked — usage unavailable: {usage_err}")
         except Exception as e:
             logger.warning(f"Error during AI-based JSON extraction: {e}")
             assistant_content = input_response
